@@ -1,4 +1,3 @@
-cat > ~/Downloads/xray-sourcer/api/sheets.js << 'EOF'
 import { appendRowsToSheet, fetchExistingKeys } from './_sheets.js';
 
 export default async function handler(req, res) {
@@ -27,4 +26,3 @@ export default async function handler(req, res) {
   }
   return res.status(405).json({ error: 'Method not allowed' });
 }
-EOF

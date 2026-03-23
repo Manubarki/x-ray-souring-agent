@@ -1,69 +1,116 @@
 # LinkedIn X-ray Sourcer
 
 Google X-ray search for LinkedIn /in/ profiles, powered by Serper.dev.  
-Deployed on Vercel — API key lives server-side, never in the browser.
+Runs on demand via the UI **and** automatically every Monday at 08:00 IST via Vercel Cron.  
+New profiles are appended to a Google Sheet (deduped by SHA-1 URL hash).
+
+---
 
 ## Project structure
 
 ```
 xray-sourcer/
 ├── api/
-│   └── serper.js        ← Vercel serverless function (proxies Serper)
+│   ├── _search.js       ← shared search + extraction logic
+│   ├── _sheets.js       ← Google Sheets auth + append (service account)
+│   ├── serper.js        ← frontend proxy (POST /api/serper)
+│   └── cron.js          ← weekly cron job (GET /api/cron)
 ├── src/
 │   ├── main.jsx
-│   └── App.jsx          ← React frontend
+│   └── App.jsx
 ├── index.html
 ├── vite.config.js
-├── vercel.json
+├── vercel.json          ← cron schedule defined here
 └── package.json
 ```
 
+---
+
+## One-time setup
+
+### 1. Google Service Account
+
+1. Go to console.cloud.google.com
+2. Create a project (or pick an existing one)
+3. Enable the Google Sheets API (APIs & Services → Enable APIs)
+4. Go to IAM & Admin → Service Accounts → Create Service Account
+   - Name: xray-sourcer
+5. Open the service account → Keys → Add Key → Create new key → JSON
+6. Download the JSON — you need two values:
+   - client_email  →  GOOGLE_SERVICE_ACCOUNT_EMAIL
+   - private_key   →  GOOGLE_PRIVATE_KEY
+
+### 2. Share your Google Sheet with the service account
+
+1. Open your Google Sheet
+2. Click Share
+3. Paste the client_email (e.g. xray-sourcer@my-project.iam.gserviceaccount.com)
+4. Set role to Editor
+5. Make sure the tab is named New_candidates (or set GOOGLE_SHEET_NAME to match)
+
+### 3. Get your Spreadsheet ID
+
+From the Sheet URL:
+https://docs.google.com/spreadsheets/d/THIS_PART/edit
+
+---
+
 ## Deploy to Vercel
 
-### 1. Push to GitHub
+### Push changes to GitHub
 
 ```bash
-git init
 git add .
-git commit -m "init"
-gh repo create xray-sourcer --public --push
-# or: git remote add origin https://github.com/Manubarki/xray-sourcer.git && git push -u origin main
+git commit -m "add cron + sheets"
+git push
 ```
 
-### 2. Import on Vercel
+### Import on Vercel
 
-1. Go to vercel.com → New Project → Import your GitHub repo
-2. Framework preset: **Vite**
-3. Build command: `npm run build`
-4. Output directory: `dist`
+1. vercel.com → New Project → import xray-sourcer
+2. Framework: Vite, build: npm run build, output: dist
 
-### 3. Add environment variable
+### Environment variables
 
-In Vercel → Project → Settings → Environment Variables:
+Add all of these in Vercel → Project → Settings → Environment Variables:
 
-| Name | Value |
-|------|-------|
-| `SERPER_API_KEY` | your key from serper.dev |
+| Variable                       | Value                                              |
+|--------------------------------|----------------------------------------------------|
+| SERPER_API_KEY                 | Your key from serper.dev                           |
+| GOOGLE_SERVICE_ACCOUNT_EMAIL   | client_email from the JSON file                    |
+| GOOGLE_PRIVATE_KEY             | private_key from the JSON (paste the whole value)  |
+| GOOGLE_SPREADSHEET_ID          | The ID from your Sheet URL                         |
+| GOOGLE_SHEET_NAME              | New_candidates (or your tab name)                  |
+| XRAY_QUERY                     | (optional) override the default Boolean query      |
+| XRAY_PAGES                     | (optional) number of Serper pages, default 5       |
+| CRON_SECRET                    | Any random string for manual cron triggers         |
 
-### 4. Redeploy
+Important for GOOGLE_PRIVATE_KEY: paste the raw value from the JSON exactly,
+including the -----BEGIN PRIVATE KEY----- header. Vercel handles escaping.
 
-Trigger a redeploy after adding the env var (Settings → Deployments → Redeploy).
+### Redeploy after adding env vars
+
+Vercel → Deployments → ... → Redeploy
+
+---
+
+## Cron schedule
+
+Defined in vercel.json:
+  schedule: "30 2 * * 1"  =  02:30 UTC  =  08:00 IST, every Monday
+
+View logs: Vercel → Project → Logs → filter by /api/cron
+
+### Trigger manually
+
+curl -X GET https://your-app.vercel.app/api/cron \
+  -H "Authorization: Bearer YOUR_CRON_SECRET"
+
+---
 
 ## Local development
 
 ```bash
 npm install
-vercel dev        # runs both Vite frontend + /api/* serverless functions locally
+vercel dev
 ```
-
-If you don't have the Vercel CLI:
-```bash
-npm install -g vercel
-vercel login
-```
-
-## How it works
-
-- The browser calls `/api/serper` (same origin — no CORS issue)
-- `api/serper.js` runs on Vercel's edge, injects `SERPER_API_KEY`, and proxies to `google.serper.dev`
-- Results are parsed client-side: LinkedIn /in/ URL filter, SHA-1 dedup, title/company extraction

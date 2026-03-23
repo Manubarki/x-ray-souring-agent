@@ -2,7 +2,7 @@ import { runSearch } from './_search.js';
 import { appendRowsToSheet, fetchExistingKeys } from './_sheets.js';
 
 const QUERY = process.env.XRAY_QUERY ||
-  'site:in.linkedin.com/in (intitle:"product manager" OR "Tech Product Manager") (API) (platform) (integrations OR "data connectors" OR "data ingestion")';
+  'site:in.linkedin.com/in (intitle:"Staff Engineer" OR intitle:"Architect" OR intitle:"principal engineer") (lakehouse) (iceberg)';
 
 const PAGES = parseInt(process.env.XRAY_PAGES || '5', 10);
 

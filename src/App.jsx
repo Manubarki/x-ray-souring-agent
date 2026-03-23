@@ -1,7 +1,5 @@
 import { useState, useCallback } from 'react';
 
-// ─── helpers ────────────────────────────────────────────────────────────────
-
 async function sha1Hex(str) {
   const enc = new TextEncoder();
   const buf = await crypto.subtle.digest('SHA-1', enc.encode(str));
@@ -56,17 +54,10 @@ async function runSearch({ query, pages, onProgress }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ q: query, page, num: 10, gl: 'in', hl: 'en' }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        onProgress(`Error on page ${page}: ${err.error || res.status}`);
-        break;
-      }
+      if (!res.ok) { const err = await res.json().catch(() => ({})); onProgress(`Error on page ${page}: ${err.error || res.status}`); break; }
       const json = await res.json();
       organic = json.organic || [];
-    } catch (e) {
-      onProgress(`Network error on page ${page}: ${e.message}`);
-      break;
-    }
+    } catch (e) { onProgress(`Network error on page ${page}: ${e.message}`); break; }
     for (const it of organic) {
       const url = (it.link || '').trim();
       if (!/^https?:\/\/(www\.)?(in\.|uk\.|sg\.)?linkedin\.com\/in\//i.test(url)) continue;
@@ -81,7 +72,23 @@ async function runSearch({ query, pages, onProgress }) {
   return results;
 }
 
-// ─── styles ─────────────────────────────────────────────────────────────────
+async function fetchSheetKeys() {
+  const res = await fetch('/api/sheets');
+  if (!res.ok) throw new Error(`Sheet keys fetch failed: ${res.status}`);
+  const data = await res.json();
+  return new Set(data.keys || []);
+}
+
+async function saveToSheet(rows) {
+  const res = await fetch('/api/sheets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rows }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Sheets error ${res.status}`);
+  return data;
+}
 
 const css = {
   wrap: { maxWidth: 860, margin: '0 auto', padding: '2rem 1.5rem', color: '#1a1a18', fontFamily: "'IBM Plex Sans', sans-serif" },
@@ -91,15 +98,13 @@ const css = {
   tagX: { background: 'none', border: 'none', cursor: 'pointer', fontSize: 13, lineHeight: 1, color: '#999', padding: 0 },
   tabBtn: (active) => ({ padding: '7px 16px', fontSize: 12, fontWeight: active ? 500 : 400, background: 'transparent', border: 'none', borderBottom: active ? '2px solid #1a1a18' : '2px solid transparent', color: active ? '#1a1a18' : '#888', cursor: 'pointer', marginBottom: -1 }),
   runBtn: (running) => ({ padding: '7px 20px', fontSize: 13, fontWeight: 500, background: running ? '#e8e8e6' : '#1a1a18', color: running ? '#999' : '#fff', border: 'none', borderRadius: 6, cursor: running ? 'not-allowed' : 'pointer' }),
-  csvBtn: { padding: '6px 13px', fontSize: 12, background: 'transparent', color: '#666', border: '1px solid #ddd', borderRadius: 6, cursor: 'pointer' },
+  outlineBtn: (disabled) => ({ padding: '6px 13px', fontSize: 12, background: 'transparent', color: disabled ? '#ccc' : '#1a1a18', border: `1px solid ${disabled ? '#eee' : '#ddd'}`, borderRadius: 6, cursor: disabled ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }),
   preview: { padding: '10px 12px', background: '#f5f5f3', borderRadius: 6, border: '1px solid #e8e8e6' },
   table: { width: '100%', borderCollapse: 'collapse', fontSize: 12 },
   th: { textAlign: 'left', padding: '8px 12px', fontSize: 10, fontWeight: 500, color: '#888', borderBottom: '1px solid #e8e8e6', letterSpacing: '0.07em', textTransform: 'uppercase', background: '#f9f9f7' },
   td: { padding: '9px 12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  logRow: { fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", padding: '4px 0', display: 'flex', gap: 12, borderBottom: '1px solid #f0f0ee' },
+  logRow: { fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", padding: '4px 0', display: 'flex', gap: 12 },
 };
-
-// ─── TagInput ────────────────────────────────────────────────────────────────
 
 function TagInput({ value, onChange, placeholder }) {
   const [draft, setDraft] = useState('');
@@ -116,8 +121,6 @@ function TagInput({ value, onChange, placeholder }) {
 
 const COUNTRIES = [{ v: 'IN', l: 'India (in.linkedin.com)' }, { v: 'US', l: 'Global (linkedin.com)' }, { v: 'UK', l: 'UK (uk.linkedin.com)' }, { v: 'SG', l: 'Singapore (sg.linkedin.com)' }];
 
-// ─── App ─────────────────────────────────────────────────────────────────────
-
 export default function App() {
   const [country, setCountry] = useState('IN');
   const [titles, setTitles] = useState(['product manager', 'Tech Product Manager']);
@@ -126,10 +129,12 @@ export default function App() {
   const [pages, setPages] = useState(5);
   const [useRaw, setUseRaw] = useState(false);
   const [rawQuery, setRawQuery] = useState('');
-
   const [status, setStatus] = useState('idle');
+  const [sheetStatus, setSheetStatus] = useState('idle');
+  const [sheetMsg, setSheetMsg] = useState('');
   const [progress, setProgress] = useState('');
   const [results, setResults] = useState([]);
+  const [savedKeys, setSavedKeys] = useState(new Set());
   const [log, setLog] = useState([]);
   const [tab, setTab] = useState('config');
   const [filter, setFilter] = useState('');
@@ -138,9 +143,12 @@ export default function App() {
   const addLog = useCallback(msg => setLog(l => [...l, { t: new Date().toLocaleTimeString(), msg }]), []);
   const finalQuery = useRaw ? rawQuery : buildQuery({ country, titles, mustHave, niceToHave });
   const isRunning = status === 'running';
+  const isSaving = sheetStatus === 'saving';
+  const newRows = results.filter(r => !savedKeys.has(r.key));
 
   const handleRun = async () => {
-    setStatus('running'); setResults([]); setLog([]); setTab('results'); setExpandedRow(null);
+    setStatus('running'); setResults([]); setLog([]); setTab('results');
+    setExpandedRow(null); setSheetStatus('idle'); setSheetMsg('');
     const onProgress = msg => { setProgress(msg); addLog(msg); };
     try {
       const found = await runSearch({ query: finalQuery, pages, onProgress });
@@ -152,6 +160,35 @@ export default function App() {
       addLog(`Error: ${e.message}`);
       setStatus('error');
       setProgress(`Error: ${e.message}`);
+    }
+  };
+
+  const handleSaveToSheet = async () => {
+    if (newRows.length === 0) return;
+    setSheetStatus('saving');
+    setSheetMsg(`Saving ${newRows.length} rows…`);
+    addLog(`Saving ${newRows.length} new profiles to sheet…`);
+    try {
+      addLog('Fetching existing sheet keys for dedup…');
+      const existingKeys = await fetchSheetKeys();
+      const dedupedRows = newRows.filter(r => !existingKeys.has(r.key));
+      addLog(`${dedupedRows.length} rows after dedup against sheet`);
+      if (dedupedRows.length === 0) {
+        setSavedKeys(prev => new Set([...prev, ...results.map(r => r.key)]));
+        setSheetStatus('saved');
+        setSheetMsg('All profiles already in sheet — nothing new to append');
+        addLog('All profiles already in sheet');
+        return;
+      }
+      const result = await saveToSheet(dedupedRows);
+      setSavedKeys(prev => new Set([...prev, ...results.map(r => r.key)]));
+      setSheetStatus('saved');
+      setSheetMsg(`Saved ${result.appended} new profiles to sheet`);
+      addLog(`Appended ${result.appended} rows → ${result.updatedRange || 'sheet'}`);
+    } catch (e) {
+      setSheetStatus('error');
+      setSheetMsg(`Sheet error: ${e.message}`);
+      addLog(`Sheet error: ${e.message}`);
     }
   };
 
@@ -170,48 +207,51 @@ export default function App() {
   });
 
   const dotColor = { idle: '#bbb', running: '#22c55e', done: '#3b82f6', error: '#ef4444' }[status];
+  const sheetBadgeStyle = { saved: { background: '#f0fdf4', border: '1px solid #bbf7d0', color: '#15803d' }, error: { background: '#fff0f0', border: '1px solid #fcc', color: '#c00' }, saving: { background: '#f5f5f3', border: '1px solid #e8e8e6', color: '#666' }, idle: null }[sheetStatus];
 
   return (
     <div style={css.wrap}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 3 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor }} />
             <span style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.3px' }}>LinkedIn X-ray Sourcer</span>
           </div>
-          <p style={{ fontSize: 12, color: '#888', margin: 0 }}>Google X-ray search for LinkedIn /in/ profiles · API key stored in Vercel env</p>
+          <p style={{ fontSize: 12, color: '#888', margin: 0 }}>Google X-ray search · weekly cron · saves to Google Sheets</p>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          {results.length > 0 && <button onClick={downloadCSV} style={css.csvBtn}>Export CSV</button>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          {results.length > 0 && (
+            <>
+              <button onClick={downloadCSV} style={css.outlineBtn(false)}>Export CSV</button>
+              <button onClick={handleSaveToSheet} disabled={isSaving || newRows.length === 0} style={{ ...css.outlineBtn(isSaving || newRows.length === 0), background: sheetStatus === 'saved' ? '#f0fdf4' : 'transparent', color: sheetStatus === 'saved' ? '#15803d' : (isSaving || newRows.length === 0 ? '#ccc' : '#1a1a18'), border: sheetStatus === 'saved' ? '1px solid #bbf7d0' : `1px solid ${isSaving || newRows.length === 0 ? '#eee' : '#ddd'}` }}>
+                {isSaving ? 'Saving…' : sheetStatus === 'saved' ? 'Saved to Sheet' : newRows.length > 0 ? `Save ${newRows.length} to Sheet` : 'Save to Sheet'}
+              </button>
+            </>
+          )}
           <button onClick={handleRun} disabled={isRunning} style={css.runBtn(isRunning)}>
             {isRunning ? 'Running…' : 'Run Search'}
           </button>
         </div>
       </div>
 
-      {/* Pages control */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1.25rem' }}>
         <label style={{ ...css.label, margin: 0 }}>Pages</label>
         <input type="number" min={1} max={10} value={pages} onChange={e => setPages(Number(e.target.value))} style={{ ...css.input, width: 64, textAlign: 'center' }} />
         <span style={{ fontSize: 11, color: '#aaa' }}>× 10 results = up to {pages * 10} profiles</span>
       </div>
 
-      {/* Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid #e8e8e6', marginBottom: '1.25rem' }}>
         {[['config', 'Query Builder'], ['results', `Results${results.length ? ` (${results.length})` : ''}`], ['log', `Log${log.length ? ` (${log.length})` : ''}`]].map(([id, label]) => (
           <button key={id} onClick={() => setTab(id)} style={css.tabBtn(tab === id)}>{label}</button>
         ))}
       </div>
 
-      {/* ── CONFIG ── */}
       {tab === 'config' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           <label style={{ fontSize: 12, color: '#666', display: 'flex', alignItems: 'center', gap: 7, cursor: 'pointer' }}>
             <input type="checkbox" checked={useRaw} onChange={e => setUseRaw(e.target.checked)} />
             Use raw Boolean query
           </label>
-
           {!useRaw ? (
             <>
               <div>
@@ -246,7 +286,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── RESULTS ── */}
       {tab === 'results' && (
         <div>
           {results.length === 0 ? (
@@ -256,44 +295,50 @@ export default function App() {
           ) : (
             <>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 10 }}>
-                <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter by name, title, company, snippet…" style={{ ...css.input, maxWidth: 360 }} />
+                <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter by name, title, company, snippet…" style={{ ...css.input, maxWidth: 340 }} />
                 <span style={{ fontSize: 11, color: '#bbb', whiteSpace: 'nowrap' }}>{filtered.length} of {results.length}</span>
               </div>
               <div style={{ border: '1px solid #e8e8e6', borderRadius: 8, overflow: 'hidden' }}>
                 <table style={css.table}>
                   <thead>
                     <tr>
-                      {[['Profile handle', '40%'], ['Job Title', '25%'], ['Company', '22%'], ['Time', '13%']].map(([h, w]) => (
-                        <th key={h} style={{ ...css.th, width: w }}>{h}</th>
+                      {[['', '4%'], ['Profile handle', '37%'], ['Job Title', '25%'], ['Company', '21%'], ['Time', '13%']].map(([h, w]) => (
+                        <th key={h + w} style={{ ...css.th, width: w }}>{h}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {filtered.map((r, i) => (
-                      <>
-                        <tr key={r.key} onClick={() => setExpandedRow(expandedRow === i ? null : i)} style={{ borderBottom: expandedRow === i ? 'none' : '1px solid #f0f0ee', cursor: 'pointer', background: expandedRow === i ? '#f9f9f7' : '#fff' }}>
-                          <td style={css.td}>
-                            <a href={r.profileUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: '#2563eb', textDecoration: 'none', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
-                              {r.profileUrl.replace(/https?:\/\/(www\.)?(in\.|uk\.|sg\.)?linkedin\.com\/in\//, '').replace(/\/$/, '')}
-                            </a>
-                          </td>
-                          <td style={{ ...css.td, color: r.jobTitle ? '#1a1a18' : '#ccc' }}>{r.jobTitle || '—'}</td>
-                          <td style={{ ...css.td, color: r.companyName ? '#1a1a18' : '#ccc' }}>{r.companyName || '—'}</td>
-                          <td style={{ ...css.td, color: '#bbb', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{r.capturedAt.slice(11, 16)}</td>
-                        </tr>
-                        {expandedRow === i && (
-                          <tr key={r.key + '_exp'}>
-                            <td colSpan={4} style={{ padding: '10px 14px 14px', borderBottom: '1px solid #e8e8e6', background: '#f9f9f7' }}>
-                              <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 500, color: '#aaa', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Result title</p>
-                              <p style={{ margin: '0 0 10px', fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", color: '#333' }}>{r.resultTitle}</p>
-                              <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 500, color: '#aaa', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Snippet</p>
-                              <p style={{ margin: '0 0 12px', fontSize: 12, color: '#444', lineHeight: 1.65 }}>{r.snippet || <em style={{ color: '#ccc' }}>No snippet available</em>}</p>
-                              <a href={r.profileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#2563eb', textDecoration: 'none' }}>Open on LinkedIn →</a>
+                    {filtered.map((r, i) => {
+                      const inSheet = savedKeys.has(r.key);
+                      return (
+                        <>
+                          <tr key={r.key} onClick={() => setExpandedRow(expandedRow === i ? null : i)} style={{ borderBottom: expandedRow === i ? 'none' : '1px solid #f0f0ee', cursor: 'pointer', background: expandedRow === i ? '#f9f9f7' : '#fff' }}>
+                            <td style={{ ...css.td, textAlign: 'center', paddingRight: 4 }}>
+                              {inSheet && <div title="Saved to sheet" style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', margin: '0 auto' }} />}
                             </td>
+                            <td style={css.td}>
+                              <a href={r.profileUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: '#2563eb', textDecoration: 'none', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>
+                                {r.profileUrl.replace(/https?:\/\/(www\.)?(in\.|uk\.|sg\.)?linkedin\.com\/in\//, '').replace(/\/$/, '')}
+                              </a>
+                            </td>
+                            <td style={{ ...css.td, color: r.jobTitle ? '#1a1a18' : '#ccc' }}>{r.jobTitle || '—'}</td>
+                            <td style={{ ...css.td, color: r.companyName ? '#1a1a18' : '#ccc' }}>{r.companyName || '—'}</td>
+                            <td style={{ ...css.td, color: '#bbb', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11 }}>{r.capturedAt.slice(11, 16)}</td>
                           </tr>
-                        )}
-                      </>
-                    ))}
+                          {expandedRow === i && (
+                            <tr key={r.key + '_exp'}>
+                              <td colSpan={5} style={{ padding: '10px 14px 14px', borderBottom: '1px solid #e8e8e6', background: '#f9f9f7' }}>
+                                <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 500, color: '#aaa', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Result title</p>
+                                <p style={{ margin: '0 0 10px', fontSize: 12, fontFamily: "'IBM Plex Mono', monospace", color: '#333' }}>{r.resultTitle}</p>
+                                <p style={{ margin: '0 0 4px', fontSize: 10, fontWeight: 500, color: '#aaa', letterSpacing: '0.07em', textTransform: 'uppercase' }}>Snippet</p>
+                                <p style={{ margin: '0 0 12px', fontSize: 12, color: '#444', lineHeight: 1.65 }}>{r.snippet || <em style={{ color: '#ccc' }}>No snippet available</em>}</p>
+                                <a href={r.profileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#2563eb', textDecoration: 'none' }}>Open on LinkedIn →</a>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -302,7 +347,6 @@ export default function App() {
         </div>
       )}
 
-      {/* ── LOG ── */}
       {tab === 'log' && (
         <div style={{ background: '#f5f5f3', borderRadius: 8, padding: '10px 14px', minHeight: 80 }}>
           {log.length === 0
@@ -317,17 +361,23 @@ export default function App() {
         </div>
       )}
 
-      {/* Status bar */}
       {(isRunning || status === 'done' || status === 'error') && (
-        <div style={{ marginTop: 14, padding: '7px 12px', borderRadius: 6, background: status === 'error' ? '#fff0f0' : '#f5f5f3', border: `1px solid ${status === 'error' ? '#fcc' : '#e8e8e6'}`, fontSize: 12, color: status === 'error' ? '#c00' : '#666', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ marginTop: 12, padding: '7px 12px', borderRadius: 6, background: status === 'error' ? '#fff0f0' : '#f5f5f3', border: `1px solid ${status === 'error' ? '#fcc' : '#e8e8e6'}`, fontSize: 12, color: status === 'error' ? '#c00' : '#666', display: 'flex', alignItems: 'center', gap: 8 }}>
           {isRunning && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }} />}
           {progress}
         </div>
       )}
 
-      {/* Footer */}
-      <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid #f0f0ee', fontSize: 11, color: '#bbb', lineHeight: 1.7 }}>
-        Serper API key is stored as <code style={{ fontFamily: "'IBM Plex Mono', monospace", background: '#f0f0ee', padding: '1px 4px', borderRadius: 3 }}>SERPER_API_KEY</code> in Vercel environment variables — never exposed to the browser.
+      {sheetMsg && sheetBadgeStyle && (
+        <div style={{ marginTop: 6, padding: '7px 12px', borderRadius: 6, fontSize: 12, display: 'flex', alignItems: 'center', gap: 8, ...sheetBadgeStyle }}>
+          {isSaving && <div style={{ width: 7, height: 7, borderRadius: '50%', background: '#888', flexShrink: 0 }} />}
+          {sheetMsg}
+        </div>
+      )}
+
+      <div style={{ marginTop: '2rem', paddingTop: '1rem', borderTop: '1px solid #f0f0ee', fontSize: 11, color: '#bbb', lineHeight: 1.8 }}>
+        All API keys stored as Vercel environment variables — never sent to the browser.
+        Cron runs every <strong style={{ color: '#aaa' }}>Monday 08:00 IST</strong> and appends new profiles automatically.
       </div>
     </div>
   );

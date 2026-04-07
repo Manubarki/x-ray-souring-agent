@@ -35,26 +35,38 @@ function extractJobTitleAndCompany(title, snippet) {
   return { jobTitle: jobTitle || '', companyName: companyName || '' };
 }
 
-// Auto-quote multi-word keywords for query building
 function quoteIfMultiWord(k) {
-  const stripped = k.replace(/^"|"$/g, ''); // remove existing quotes
+  const stripped = k.replace(/^"|"$/g, '');
   return stripped.includes(' ') ? `"${stripped}"` : stripped;
 }
 
-function buildQuery({ country, titles, mustHave, niceToHave }) {
-  const countryMap = { IN: 'in.linkedin.com', US: 'linkedin.com', UK: 'uk.linkedin.com', SG: 'sg.linkedin.com' };
+function buildQuery({ country, titles, mustHave, niceToHave, companies }) {
+  const countryMap = {
+    IN: 'in.linkedin.com',
+    US: 'linkedin.com',
+    UK: 'uk.linkedin.com',
+    SG: 'sg.linkedin.com',
+    CA: 'ca.linkedin.com',
+  };
   const site = `site:${countryMap[country] || 'in.linkedin.com'}/in`;
-  const titleStr = titles.filter(Boolean).length ? `(${titles.filter(Boolean).map(t => `intitle:"${t.replace(/^"|"$/g, '')}"`).join(' OR ')})` : '';
+  const titleStr = titles.filter(Boolean).length
+    ? `(${titles.filter(Boolean).map(t => `intitle:"${t.replace(/^"|"$/g, '')}"`).join(' OR ')})`
+    : '';
   const mustStr = mustHave.filter(Boolean).map(k => `(${quoteIfMultiWord(k)})`).join(' ');
-  const niceStr = niceToHave.filter(Boolean).length ? `(${niceToHave.filter(Boolean).map(quoteIfMultiWord).join(' OR ')})` : '';
-  return [site, titleStr, mustStr, niceStr].filter(Boolean).join(' ');
+  const niceStr = niceToHave.filter(Boolean).length
+    ? `(${niceToHave.filter(Boolean).map(quoteIfMultiWord).join(' OR ')})`
+    : '';
+  const companyStr = companies && companies.filter(Boolean).length
+    ? `("${companies.filter(Boolean).map(c => c.replace(/^"|"$/g, '')).join('" OR "')}")`
+    : '';
+  return [site, titleStr, mustStr, niceStr, companyStr].filter(Boolean).join(' ');
 }
 
 async function runSearch({ query, pages, onProgress }) {
   const seen = new Set();
   const results = [];
   for (let page = 1; page <= pages; page++) {
-    onProgress(`Fetching page ${page} of ${pages}…`);
+    onProgress(`Fetching page ${page} of ${pages}...`);
     let organic = [];
     try {
       const res = await fetch('/api/serper', {
@@ -68,7 +80,7 @@ async function runSearch({ query, pages, onProgress }) {
     } catch (e) { onProgress(`Network error on page ${page}: ${e.message}`); break; }
     for (const it of organic) {
       const url = (it.link || '').trim();
-      if (!/^https?:\/\/(www\.)?(in\.|uk\.|sg\.)?linkedin\.com\/in\//i.test(url)) continue;
+      if (!/^https?:\/\/(www\.)?(in\.|uk\.|sg\.|ca\.)?linkedin\.com\/in\//i.test(url)) continue;
       if (seen.has(url.toLowerCase())) continue;
       seen.add(url.toLowerCase());
       const key = await sha1Hex(url.toLowerCase());
@@ -169,14 +181,10 @@ function Logo() {
   return (
     <svg width="38" height="38" viewBox="0 0 38 38" fill="none" xmlns="http://www.w3.org/2000/svg">
       <rect width="38" height="38" rx="10" fill={P[600]} />
-      {/* Magnifier circle */}
       <circle cx="16" cy="16" r="7" stroke="white" strokeWidth="2.2" fill="none" />
-      {/* Magnifier handle */}
       <line x1="21" y1="21" x2="28" y2="28" stroke="white" strokeWidth="2.4" strokeLinecap="round" />
-      {/* LinkedIn-style lines inside */}
       <line x1="13" y1="14" x2="19" y2="14" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
       <line x1="13" y1="17" x2="17" y2="17" stroke="white" strokeWidth="1.5" strokeLinecap="round" opacity="0.7" />
-      {/* Small dot accent */}
       <circle cx="30" cy="10" r="2.5" fill={P[300]} />
     </svg>
   );
@@ -187,13 +195,9 @@ function Logo() {
 function Background() {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 0, overflow: 'hidden', pointerEvents: 'none' }}>
-      {/* Base gradient */}
       <div style={{ position: 'absolute', inset: 0, background: `linear-gradient(145deg, #f0ecff 0%, #faf9ff 40%, #ece8fd 100%)` }} />
-      {/* Large soft orb top-right */}
       <div style={{ position: 'absolute', top: -120, right: -100, width: 500, height: 500, borderRadius: '50%', background: `radial-gradient(circle, ${P[200]}55 0%, transparent 70%)` }} />
-      {/* Medium orb bottom-left */}
       <div style={{ position: 'absolute', bottom: -80, left: -60, width: 380, height: 380, borderRadius: '50%', background: `radial-gradient(circle, ${P[300]}33 0%, transparent 70%)` }} />
-      {/* Subtle grid lines */}
       <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', opacity: 0.06 }} xmlns="http://www.w3.org/2000/svg">
         <defs>
           <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
@@ -202,7 +206,6 @@ function Background() {
         </defs>
         <rect width="100%" height="100%" fill="url(#grid)" />
       </svg>
-      {/* Floating dots */}
       {[[10, 15], [85, 25], [20, 75], [75, 65], [50, 10], [90, 80]].map(([x, y], i) => (
         <div key={i} style={{ position: 'absolute', left: `${x}%`, top: `${y}%`, width: i % 2 === 0 ? 6 : 4, height: i % 2 === 0 ? 6 : 4, borderRadius: '50%', background: P[i % 2 === 0 ? 300 : 400], opacity: 0.4 }} />
       ))}
@@ -217,7 +220,6 @@ function TagInput({ value, onChange, placeholder, autoQuote = false }) {
   const add = () => {
     let v = draft.trim();
     if (!v) return;
-    // Auto-quote multi-word values if flag is set
     if (autoQuote && v.includes(' ') && !v.startsWith('"')) v = `"${v}"`;
     if (!value.includes(v)) onChange([...value, v]);
     setDraft('');
@@ -256,7 +258,16 @@ function SnippetTooltip({ snippet, visible }) {
   );
 }
 
-const COUNTRIES = [{ v: 'IN', l: 'India (in.linkedin.com)' }, { v: 'US', l: 'Global (linkedin.com)' }, { v: 'UK', l: 'UK (uk.linkedin.com)' }, { v: 'SG', l: 'Singapore (sg.linkedin.com)' }, { v: 'CA', l: 'Canada (ca.linkedin.com)' }];
+// ─── constants ────────────────────────────────────────────────────────────────
+
+const COUNTRIES = [
+  { v: 'IN', l: 'India (in.linkedin.com)' },
+  { v: 'US', l: 'Global (linkedin.com)' },
+  { v: 'UK', l: 'UK (uk.linkedin.com)' },
+  { v: 'SG', l: 'Singapore (sg.linkedin.com)' },
+  { v: 'CA', l: 'Canada (ca.linkedin.com)' },
+];
+
 const DEFAULT_CRON_QUERY = 'site:in.linkedin.com/in (intitle:"Staff Engineer" OR intitle:"Architect" OR intitle:"principal engineer") (lakehouse) (iceberg)';
 
 // ─── App ──────────────────────────────────────────────────────────────────────
@@ -266,7 +277,8 @@ export default function App() {
   const [titles, setTitles] = useState(['product manager', 'Tech Product Manager']);
   const [mustHave, setMustHave] = useState(['API', 'platform']);
   const [niceToHave, setNiceToHave] = useState(['integrations', 'data connectors', 'data ingestion']);
-  const [pages, setPages] = useState(5);
+  const [companies, setCompanies] = useState([]);
+  const [pages, setPages] = useState(10);
   const [useRaw, setUseRaw] = useState(false);
   const [rawQuery, setRawQuery] = useState('');
 
@@ -287,7 +299,7 @@ export default function App() {
   const [expandedRow, setExpandedRow] = useState(null);
 
   const addLog = useCallback(msg => setLog(l => [...l, { t: new Date().toLocaleTimeString(), msg }]), []);
-  const finalQuery = useRaw ? rawQuery : buildQuery({ country, titles, mustHave, niceToHave });
+  const finalQuery = useRaw ? rawQuery : buildQuery({ country, titles, mustHave, niceToHave, companies });
   const isRunning = status === 'running';
   const isSaving = sheetStatus === 'saving';
   const newRows = results.filter(r => !savedKeys.has(r.key));
@@ -308,10 +320,10 @@ export default function App() {
 
   const handleSaveToSheet = async () => {
     if (newRows.length === 0) return;
-    setSheetStatus('saving'); setSheetMsg(`Saving ${newRows.length} rows…`);
-    addLog(`Saving ${newRows.length} new profiles to sheet…`);
+    setSheetStatus('saving'); setSheetMsg(`Saving ${newRows.length} rows...`);
+    addLog(`Saving ${newRows.length} new profiles to sheet...`);
     try {
-      addLog('Fetching existing sheet keys for dedup…');
+      addLog('Fetching existing sheet keys for dedup...');
       const existingKeys = await fetchSheetKeys();
       const dedupedRows = newRows.filter(r => !existingKeys.has(r.key));
       addLog(`${dedupedRows.length} rows after dedup`);
@@ -385,12 +397,12 @@ export default function App() {
                     border: sheetStatus === 'saved' ? '1px solid #bbf7d0' : `1px solid ${isSaving || newRows.length === 0 ? P[200] : P[300]}`,
                   }}
                 >
-                  {isSaving ? 'Saving…' : sheetStatus === 'saved' ? 'Saved to Sheet' : newRows.length > 0 ? `Save ${newRows.length} to Sheet` : 'Save to Sheet'}
+                  {isSaving ? 'Saving...' : sheetStatus === 'saved' ? 'Saved to Sheet' : newRows.length > 0 ? `Save ${newRows.length} to Sheet` : 'Save to Sheet'}
                 </button>
               </>
             )}
             <button onClick={handleRun} disabled={isRunning} style={css.runBtn(isRunning)}>
-              {isRunning ? 'Running…' : 'Run Search'}
+              {isRunning ? 'Running...' : 'Run Search'}
             </button>
           </div>
         </div>
@@ -398,8 +410,11 @@ export default function App() {
         {/* Pages */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: '1.25rem' }}>
           <label style={{ ...css.label, margin: 0 }}>Pages</label>
-          <input type="number" min={1} max={10} value={pages} onChange={e => setPages(Number(e.target.value))} style={{ ...css.input, width: 64, textAlign: 'center' }} />
-          <span style={{ fontSize: 11, color: P[400] }}>× 10 results = up to {pages * 10} profiles</span>
+          <input type="number" min={1} max={10} value={pages} onChange={e => setPages(Math.min(10, Math.max(1, Number(e.target.value))))} style={{ ...css.input, width: 64, textAlign: 'center' }} />
+          <span style={{ fontSize: 11, color: P[400] }}>
+            x 10 = up to {pages * 10} profiles
+            {pages === 10 && <span style={{ marginLeft: 6, padding: '2px 7px', borderRadius: 10, background: P[100], color: P[600], fontSize: 10, fontWeight: 600 }}>MAX</span>}
+          </span>
         </div>
 
         {/* Tabs */}
@@ -436,6 +451,10 @@ export default function App() {
                   <div>
                     <label style={css.label}>Nice-to-have <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: P[400] }}>— multi-word terms auto-quoted · joined with OR</span></label>
                     <TagInput value={niceToHave} onChange={setNiceToHave} placeholder='e.g. integrations or "data connectors"' autoQuote={true} />
+                  </div>
+                  <div>
+                    <label style={css.label}>Target companies <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: P[400] }}>— press Enter after each · joined with OR · leave empty to search all</span></label>
+                    <TagInput value={companies} onChange={setCompanies} placeholder='e.g. Databricks, Snowflake, Atlan' autoQuote={false} />
                   </div>
                   <div style={{ padding: '10px 13px', background: P[50], borderRadius: 8, border: `1px solid ${P[100]}` }}>
                     <p style={{ margin: '0 0 5px', fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: P[400] }}>Generated query preview</p>
@@ -483,7 +502,6 @@ export default function App() {
                 {cronMsg && <p style={{ margin: 0, fontSize: 11, color: P[500], flex: 1 }}>{cronMsg}</p>}
               </div>
             </div>
-
             <div style={{ ...css.card, padding: '1.25rem' }}>
               <p style={{ margin: '0 0 6px', fontSize: 13, fontWeight: 600, color: P[800] }}>Test cron manually</p>
               <p style={{ margin: '0 0 10px', fontSize: 12, color: P[500] }}>Run the cron job right now from your terminal.</p>
@@ -507,7 +525,7 @@ export default function App() {
             ) : (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 10 }}>
-                  <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter by name, title, company, snippet…" style={{ ...css.input, maxWidth: 340 }} />
+                  <input value={filter} onChange={e => setFilter(e.target.value)} placeholder="Filter by name, title, company, snippet..." style={{ ...css.input, maxWidth: 340 }} />
                   <span style={{ fontSize: 11, color: P[400], whiteSpace: 'nowrap' }}>{filtered.length} of {results.length} profiles</span>
                 </div>
                 <div style={{ ...css.card, overflow: 'hidden' }}>
@@ -531,7 +549,7 @@ export default function App() {
                               </td>
                               <td style={{ ...css.td, position: 'relative' }}>
                                 <a href={r.profileUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} style={{ color: P[600], textDecoration: 'none', fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, fontWeight: 500 }}>
-                                  {r.profileUrl.replace(/https?:\/\/(www\.)?(in\.|uk\.|sg\.)?linkedin\.com\/in\//, '').replace(/\/$/, '')}
+                                  {r.profileUrl.replace(/https?:\/\/(www\.)?(in\.|uk\.|sg\.|ca\.)?linkedin\.com\/in\//, '').replace(/\/$/, '')}
                                 </a>
                                 <SnippetTooltip snippet={r.snippet} visible={isHovered && expandedRow !== i} />
                               </td>

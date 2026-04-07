@@ -256,7 +256,7 @@ function SnippetTooltip({ snippet, visible }) {
   );
 }
 
-const COUNTRIES = [{ v: 'IN', l: 'India (in.linkedin.com)' }, { v: 'US', l: 'Global (linkedin.com)' }, { v: 'UK', l: 'UK (uk.linkedin.com)' }, { v: 'SG', l: 'Singapore (sg.linkedin.com)' }];
+const COUNTRIES = [{ v: 'IN', l: 'India (in.linkedin.com)' }, { v: 'US', l: 'Global (linkedin.com)' }, { v: 'UK', l: 'UK (uk.linkedin.com)' }, { v: 'SG', l: 'Singapore (sg.linkedin.com)' }, { v: 'CA', l: 'Canada (ca.linkedin.com)' }];
 const DEFAULT_CRON_QUERY = 'site:in.linkedin.com/in (intitle:"Staff Engineer" OR intitle:"Architect" OR intitle:"principal engineer") (lakehouse) (iceberg)';
 
 // ─── App ──────────────────────────────────────────────────────────────────────
